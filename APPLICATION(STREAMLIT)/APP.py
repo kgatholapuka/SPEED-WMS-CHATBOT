@@ -108,9 +108,24 @@ def get_llm_answer(prompt):
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
-            {"role": "system", "content": "You are a Speed WMS expert assistant."},
-            {"role": "user", "content": prompt}
-        ],
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior Speed WMS domain expert and trainer.\n"
+                        "You must give VERY DETAILED, STEP-BY-STEP answers.\n"
+                        "Rules:\n"
+                        "-When a answer is based on the database tables, make sure to inculde the table name and all the columns you find in that table or file  "
+                        "- Use ONLY the provided context\n"
+                        "- Explain each step clearly\n"
+                        "- Use numbered steps and bullet points\n"
+                        "- Include sub-steps where relevant\n"
+                        "- If something is unclear, let them know that they can contact kgathola Puka for more questions or log a ticket\n"
+                        "- If the answer is not in the context, say exactly: I do not know."
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ],
+            
         temperature=0.2,
         max_tokens=1000,
         top_p=0.9
@@ -228,3 +243,4 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+

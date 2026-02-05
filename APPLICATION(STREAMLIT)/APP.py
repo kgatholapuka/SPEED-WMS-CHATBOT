@@ -58,7 +58,7 @@ client = load_llm_client()
 # ==================================================
 # RETRIEVAL FUNCTION
 # ==================================================
-def retrieve_context(query, top_k=5, max_distance=1.0):
+def retrieve_context(query, top_k=7, max_distance=1.0):
     query_embedding = embedding_model.encode([query], convert_to_numpy=True)
     query_embedding = np.array(query_embedding).astype("float32")
 
@@ -243,4 +243,5 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+
 

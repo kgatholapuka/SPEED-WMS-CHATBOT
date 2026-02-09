@@ -56,6 +56,34 @@ index, chunks, embedding_model = load_vector_store()
 client = load_llm_client()
 
 # ==================================================
+# SESSION-BASED CONVERSATION MEMORY
+# ==================================================
+MAX_TURNS = 8
+
+def add_to_memory(role, content):
+    if "conversation_memory" not in st.session_state:
+        st.session_state.conversation_memory = []
+
+    st.session_state.conversation_memory.append({
+        "role": role,
+        "content": content
+    })
+
+    # Keep only last N turns (user + assistant)
+    if len(st.session_state.conversation_memory) > MAX_TURNS * 2:
+        st.session_state.conversation_memory = st.session_state.conversation_memory[-MAX_TURNS * 2:]
+
+
+def format_memory():
+    if "conversation_memory" not in st.session_state:
+        return ""
+
+    return "\n".join(
+        f"{m['role'].upper()}: {m['content']}"
+        for m in st.session_state.conversation_memory
+    )
+
+# ==================================================
 # RETRIEVAL FUNCTION
 # ==================================================
 def retrieve_context(query, top_k=7, max_distance=1.0):
@@ -73,33 +101,32 @@ def retrieve_context(query, top_k=7, max_distance=1.0):
 
     return results
 
-
 # ==================================================
-# PROMPT BUILDER
+# PROMPT BUILDER (GEN RAG + MEMORY)
 # ==================================================
-def build_prompt(context_chunks, question):
-    context = "\n\n---\n\n".join(context_chunks)
+def build_prompt(question, retrieved_chunks, memory_text):
+    context = "\n\n".join(f"[CONTEXT]\n{chunk}" for chunk in retrieved_chunks)
 
     return f"""
-You are a senior Speed WMS domain expert and trainer.
+You are an internal Speed WMS support assistant.
 
 Rules:
 - Use ONLY the provided context
-- Give VERY DETAILED, STEP-BY-STEP answers
-- Use numbered steps and bullet points
-- Include sub-steps where relevant
-- If something is unclear, advise the user to contact Kgathola Puka or log a support ticket
-- If the answer is not in the context, say exactly: I do not know.
+- Answer in VERY DETAILED, step-by-step format
+- Use numbered steps and sub-steps
+- If the answer is not found, say exactly: I do not know.
+
+Conversation so far:
+{memory_text}
 
 Context:
 {context}
 
-Question:
+User question:
 {question}
 
 Answer:
-"""
-
+""".strip()
 
 # ==================================================
 # LLM CALL
@@ -108,36 +135,33 @@ def get_llm_answer(prompt):
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a senior Speed WMS domain expert and trainer.\n"
-                        "You must give VERY DETAILED, STEP-BY-STEP answers.\n"
-                        "Rules:\n"
-                        "-When a answer is based on the database tables, make sure to inculde the table name and all the columns you find in that table or file  "
-                        "- Use ONLY the provided context\n"
-                        "- Explain each step clearly\n"
-                        "- Use numbered steps and bullet points\n"
-                        "- Include sub-steps where relevant\n"
-                        "- If something is unclear, let them know that they can contact kgathola Puka for more questions or log a ticket\n"
-                        "- If the answer is not in the context, say exactly: I do not know."
-                    )
-                },
-                {"role": "user", "content": prompt}
-            ],
-            
+            {
+                "role": "system",
+                "content": (
+                    "You are a senior Speed WMS domain expert and trainer.\n"
+                    "You must give VERY DETAILED, STEP-BY-STEP answers.\n"
+                    "Rules:\n"
+                    "- When a answer is based on database tables, include table name and all columns found\n"
+                    "- Use ONLY the provided context\n"
+                    "- Explain each step clearly\n"
+                    "- Use numbered steps and bullet points\n"
+                    "- Include sub-steps where relevant\n"
+                    "- If unclear, advise contacting Kgathola Puka or logging a support ticket\n"
+                    "- If answer not in context, say exactly: I do not know."
+                )
+            },
+            {"role": "user", "content": prompt}
+        ],
         temperature=0.2,
         max_tokens=1000,
         top_p=0.9
     )
     return completion.choices[0].message.content.strip()
 
-
 # ==================================================
 # 💬 CHATBOT PAGE
 # ==================================================
 if page == "💬 Chatbot":
-
     st.title("💬 Speed WMS Chatbot")
 
     st.markdown("""
@@ -174,7 +198,7 @@ if page == "💬 Chatbot":
     """, unsafe_allow_html=True)
 
     # --------------------------------------------------
-    # SESSION STATE
+    # SESSION STATE INIT
     # --------------------------------------------------
     if "messages" not in st.session_state:
         st.session_state.messages = [{
@@ -192,30 +216,36 @@ if page == "💬 Chatbot":
     user_input = st.chat_input("Ask a Speed WMS question...")
 
     if user_input:
+        # Add user to session memory
+        add_to_memory("user", user_input)
+
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         with st.chat_message("assistant"):
             with st.spinner("🔍 Searching documentation..."):
                 retrieved_chunks = retrieve_context(user_input)
-                prompt = build_prompt(retrieved_chunks, user_input)
+
+                memory_text = format_memory()
+                prompt = build_prompt(user_input, retrieved_chunks, memory_text)
                 answer = get_llm_answer(prompt)
 
             final_answer = f"💬 {answer}"
             st.markdown(final_answer)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": final_answer}
-            )
 
+            # Add assistant answer to memory
+            add_to_memory("assistant", answer)
+
+            st.session_state.messages.append({"role": "assistant", "content": final_answer})
+
+            # Sources used
             with st.expander("📄 Sources used"):
                 for i, chunk in enumerate(retrieved_chunks):
                     st.markdown(f"**Source {i+1}:** {chunk[:1000]}...")
-
 
 # ==================================================
 # 🆘 HELP & SUPPORT PAGE
 # ==================================================
 if page == "🆘 Help & Support":
-
     st.header("🆘 Help & Support")
 
     st.markdown("""
@@ -243,5 +273,3 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
-
-

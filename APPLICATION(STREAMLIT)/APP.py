@@ -156,7 +156,7 @@ def get_llm_answer(prompt):
             },
             {"role": "user", "content": prompt}
         ],
-        max_tokens=1500,
+        max_tokens=2000,
         temperature=0.1
     )
 
@@ -242,9 +242,7 @@ if page == "💬 Chatbot":
             st.session_state.messages.append({"role": "assistant", "content": final_answer})
 
             # Sources used
-            with st.expander("📄 Sources used"):
-                for i, chunk in enumerate(retrieved_chunks):
-                    st.markdown(f"**Source {i+1}:** {chunk[:5000]}...")
+           
 
 # ==================================================
 # 🆘 HELP & SUPPORT PAGE
@@ -277,6 +275,7 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+
 
 
 

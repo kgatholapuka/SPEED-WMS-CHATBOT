@@ -244,7 +244,7 @@ if page == "💬 Chatbot":
             # Sources used
             with st.expander("📄 Sources used"):
                 for i, chunk in enumerate(retrieved_chunks):
-                    st.markdown(f"**Source {i+1}:** {chunk[:2000]}...")
+                    st.markdown(f"**Source {i+1}:** {chunk[:5000]}...")
 
 # ==================================================
 # 🆘 HELP & SUPPORT PAGE
@@ -277,5 +277,6 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+
 
 

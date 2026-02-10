@@ -156,7 +156,7 @@ def get_llm_answer(prompt):
             },
             {"role": "user", "content": prompt}
         ],
-        max_tokens=2000,
+        max_tokens=1000,
         temperature=0.1
     )
 
@@ -275,6 +275,7 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+
 
 
 

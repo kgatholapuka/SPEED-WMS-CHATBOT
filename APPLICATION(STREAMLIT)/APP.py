@@ -86,33 +86,42 @@ def format_memory():
 # ==================================================
 # RETRIEVAL FUNCTION
 # ==================================================
-def retrieve_context(query, top_k=7, max_distance=1.0):
-    query_embedding = embedding_model.encode([query], convert_to_numpy=True)
-    query_embedding = np.array(query_embedding).astype("float32")
+def retrieve_context(query, top_k=6):
+    query_embedding = embedding_model.encode(
+        [query], convert_to_numpy=True
+    ).astype("float32")
 
-    distances, indices = index.search(query_embedding, top_k)
+    query_embedding /= np.linalg.norm(query_embedding, axis=1, keepdims=True)
+
+    scores, indices = index.search(query_embedding, top_k)
 
     results = []
-    for dist, idx in zip(distances[0], indices[0]):
+    for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
-        if dist <= max_distance:
-            results.append(chunks[idx]["text"])
+        results.append({
+            "score": float(score),
+            "text": chunks[idx]["text"],
+            "source": chunks[idx].get("source", "unknown")
+        })
 
     return results
 
 # ==================================================
 # PROMPT BUILDER (GEN RAG + MEMORY)
 # ==================================================
-def build_prompt(question, retrieved_chunks, memory_text):
-    context = "\n\n".join(f"[CONTEXT]\n{chunk}" for chunk in retrieved_chunks)
+def build_prompt(query, retrieved_chunks, memory_text):
+    context = "\n\n".join(
+        f"[SOURCE: {c['source']} | SCORE: {c['score']:.3f}]\n{c['text']}"
+        for c in retrieved_chunks
+    )
 
-    return f"""
+    prompt = f"""
 You are an internal Speed WMS support assistant.
 
 Rules:
 - Use ONLY the provided context
-- Answer in VERY DETAILED, step-by-step format
+- Answer in very detailed, step-by-step format
 - Use numbered steps and sub-steps
 - If the answer is not found, say exactly: I do not know.
 
@@ -123,39 +132,34 @@ Context:
 {context}
 
 User question:
-{question}
+{query}
 
 Answer:
-""".strip()
+"""
+    return prompt.strip()
 
 # ==================================================
 # LLM CALL
 # ==================================================
 def get_llm_answer(prompt):
     completion = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-120b",
         messages=[
             {
                 "role": "system",
                 "content": (
                     "You are a senior Speed WMS domain expert and trainer.\n"
-                    "You must give VERY DETAILED, STEP-BY-STEP answers.\n"
-                    "Rules:\n"
-                    "- When a answer is based on database tables, include table name and all columns found\n"
-                    "- Use ONLY the provided context\n"
-                    "- Explain each step clearly\n"
-                    "- Use numbered steps and bullet points\n"
-                    "- Include sub-steps where relevant\n"
-                    "- If unclear, advise contacting Kgathola Puka or logging a support ticket\n"
-                    "- If answer not in context, say exactly: I do not know."
+                    "Give VERY DETAILED, STEP-BY-STEP answers.\n"
+                    "If database tables are mentioned, include table names and columns.\n"
+                    "If unclear, advise contacting Support."
                 )
             },
             {"role": "user", "content": prompt}
         ],
-        temperature=0.2,
-        max_tokens=1000,
-        top_p=0.9
+        max_tokens=1500,
+        temperature=0.1
     )
+
     return completion.choices[0].message.content.strip()
 
 # ==================================================
@@ -273,3 +277,4 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+

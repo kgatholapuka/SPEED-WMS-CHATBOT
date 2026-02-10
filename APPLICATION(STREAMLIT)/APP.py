@@ -157,7 +157,7 @@ def get_llm_answer(prompt):
             {"role": "user", "content": prompt}
         ],
         max_tokens=2000,
-        temperature=0.1
+        temperature=0
     )
 
     return completion.choices[0].message.content.strip()
@@ -275,6 +275,7 @@ This section is ready for **Power Automate / Ticketing integration**.
 🤖 **Puks AI Assistant**  
 Built to help. Learning every day.
 """)
+
 
 
 

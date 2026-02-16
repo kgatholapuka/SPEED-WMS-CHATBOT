@@ -16,7 +16,7 @@ torch >= 2.1.0
 
 groq >= 0.9.0
 
-pip install git+ssh://git@github.com/dorianbrown/rank_bm25.git
+pip install rank-bm25
 
 
 typing-extensions>=4.5

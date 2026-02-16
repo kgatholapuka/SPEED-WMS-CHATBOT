@@ -11,13 +11,13 @@ faiss-cpu>=1.7.4
 sentence-transformers>=2.2.2
 
 # Cross-encoder for reranking
-torch>=2.1.0
+torch >= 2.1.0
 
 # Groq client
-groq>=0.9.0
+groq >= 0.9.0
 
 # BM25 keyword retrieval
-rank_bm25>=0.5.0
+rank_bm25 >= 0.5.0
 
 # Optional: for typing and utils (recommended for your project)
 typing-extensions>=4.5

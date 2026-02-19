@@ -12,7 +12,7 @@ from collections import deque
 # PAGE CONFIG
 # ==================================================
 st.set_page_config(
-    page_title="Speed WMS AI",
+    page_title="Puks AI(Predictive Unified Knowledge System)",
     page_icon="🚀",
     layout="wide"
 )
@@ -211,6 +211,8 @@ def build_prompt(query, retrieved_chunks, memory_text=""):
             "write query",
             "generate query",
             "how do i get",
+            "how do i join",
+            "report code",
             "join"
         ]
     )
@@ -276,20 +278,20 @@ You MUST generate production-grade SQL.
 JOIN RULES:
 
 Inbound:
-- Use NOSU (Support number)
-- Use REE_NORE (Reception line)
+- Use NOSU (Support number) but the support number somes from the rel_dat and is not in ree_dat so when they want to use the recption header with the lines they have to use the ree_nore and the act_code
+- Use REE_NORE (Reception header number)
 
 Outbound:
 - Use OPL_NOSU (Support number)
 - Use OIPE_NOOE (Outbound line)
 
 Tables commonly linked:
-ree_dat, rel_dat, stk_dat, mie_dat, mvt_dat
+ree_dat, rel_dat, stk_dat, mvt_dat,ope_dat,opl_dat,mie_dat,mil_dat,chg_dat,chl_dat
 
 Rules:
-1. Always use correct join keys.
-2. Prefer NOSU-based joins where applicable.
-3. Use INNER JOIN unless business logic requires otherwise.
+1. Always use correct join keys before using those keys be sure to check from the table schema what that column is in that table if the column is a FK key please understand the tables first so that when you join will make sure to use the best columns to join.
+2. Prefer nosu to join buit also be carefully because nosu can be joined on the lines table e.g.rel_dat,opl_dat,mil_dat but can't be join from the headers. you can also search for more docuemnts to tell you about the support so that you can understand well.
+3. Always use the best joins based on the question and the goal of the output.
 4. Use clear aliases.
 5. Provide complete working SQL.
 6. Explain what the query does after the SQL.
@@ -444,6 +446,7 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

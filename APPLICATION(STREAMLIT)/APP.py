@@ -334,14 +334,10 @@ def ask(question):
 
     retrieved = retrieve_context(question)
 
-    sql_keywords = ["sql", "select", "query", "join", "where", "insert", "update", "column", "table"]
-    is_sql_query = any(word in question.lower() for word in sql_keywords)
-
     prompt = build_prompt(
         question,
         retrieved,
-        memory.format(),
-        sql_mode=is_sql_query
+        memory.format()
     )
 
     answer = get_llm_answer(prompt)
@@ -350,6 +346,7 @@ def ask(question):
     memory.add_assistant(answer)
 
     return answer, retrieved
+
 
 # ==================================================
 # CHAT UI
@@ -404,4 +401,5 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 

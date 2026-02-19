@@ -190,22 +190,39 @@ def build_prompt(query, retrieved_chunks, memory_text=""):
 
     query_lower = query.lower()
 
+    # ===============================
+    # INTENT DETECTION
+    # ===============================
+
     is_table_request = any(
         phrase in query_lower for phrase in [
             "all columns",
             "table",
             "schema",
             "structure",
-            "how do i join",
             "explain table"
         ]
     )
+
+    is_sql_generation = any(
+        phrase in query_lower for phrase in [
+            "sql",
+            "select",
+            "write query",
+            "generate query",
+            "how do i get",
+            "join"
+        ]
+    )
+
+    # ===============================
+    # BUILD CONTEXT
+    # ===============================
 
     context_sections = []
 
     for c in retrieved_chunks:
 
-        metadata = c.get("metadata", {})
         text = c["text"]
 
         if c.get("structured_data"):
@@ -217,7 +234,7 @@ def build_prompt(query, retrieved_chunks, memory_text=""):
                 f"DESCRIPTION: {table_json.get('description','')}",
                 f"PRIMARY KEY: {table_json.get('primary_key',[])}",
                 "",
-                "FULL COLUMN SCHEMA:"
+                "COLUMNS:"
             ]
 
             for col in table_json.get("columns", []):
@@ -245,48 +262,73 @@ def build_prompt(query, retrieved_chunks, memory_text=""):
 
     context_text = "\n\n".join(context_sections)
 
-    if is_table_request:
+    # ===============================
+    # SYSTEM INSTRUCTIONS
+    # ===============================
+
+    if is_sql_generation:
+
+        system_instruction = """
+You are the original database architect of Speed WMS.
+
+You MUST generate production-grade SQL.
+
+JOIN RULES:
+
+Inbound:
+- Use NOSU (Support number)
+- Use REE_NORE (Reception line)
+
+Outbound:
+- Use OPL_NOSU (Support number)
+- Use OIPE_NOOE (Outbound line)
+
+Tables commonly linked:
+ree_dat, rel_dat, stk_dat, mie_dat, mvt_dat
+
+Rules:
+1. Always use correct join keys.
+2. Prefer NOSU-based joins where applicable.
+3. Use INNER JOIN unless business logic requires otherwise.
+4. Use clear aliases.
+5. Provide complete working SQL.
+6. Explain what the query does after the SQL.
+
+Do NOT hallucinate columns.
+Only use provided schema.
+"""
+
+    elif is_table_request:
 
         system_instruction = """
 You are the original database architect of Speed WMS.
 
 When explaining a table you MUST:
 
-1. Explain the business purpose of the table.
-2. Provide the FULL schema with detailed meaning.
-3. Explain primary keys.
-4. Explain foreign keys.
-5. Explain inbound join logic.
-6. Explain outbound join logic.
-7. Explain best practice joins.
+1. Explain the business purpose.
+2. Provide full schema with meaning.
+3. Explain PK and FK.
+4. Explain inbound join logic.
+5. Explain outbound join logic.
+6. Provide example SQL joins.
+7. Mention NOSU / REE_NORE for inbound.
+8. Mention OPL_NOSU / OIPE_NOOE for outbound.
 
-JOIN RULES:
-
-Inbound joins typically use:
-- NOSU (Support number)
-- REE_NORE (Reception line)
-
-Outbound joins typically use:
-- OPL_NOSU (Support number)
-- OIPE_NOOE (Outbound line)
-
-If joining tables such as:
-ree_dat, rel_dat, stk_dat, mie_dat, mvt_dat
-
-Prefer NOSU-based joins where applicable.
-
-Always include example SQL joins.
-Be explicit and technical.
-Do not just list column names.
+Be technical and structured.
 """
 
     else:
+
         system_instruction = """
 You are a Speed WMS expert.
-Answer using only provided context.
+Use only provided context.
 If not found say:
 'I do not know, please contact the support team or submit a ticket.'
 """
+
+    # ===============================
+    # FINAL PROMPT
+    # ===============================
 
     prompt = f"""
 {system_instruction}
@@ -300,10 +342,11 @@ Context:
 User Question:
 {query}
 
-Answer professionally and in detail:
+Respond clearly and professionally.
 """
 
     return prompt.strip()
+
 
 
 # ==================================================
@@ -401,5 +444,6 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 

@@ -69,19 +69,23 @@ def load_resources():
 
     # Rebuild FAISS index (LIKE DESKTOP)
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = embedding_model.encode(texts, convert_to_numpy=True, show_progress_bar=True).astype("float32")
+    embeddings = embedding_model.encode(
+        texts,
+        convert_to_numpy=True,
+        show_progress_bar=False
+    ).astype("float32")
+
     faiss.normalize_L2(embeddings)
-    
-    index = faiss.IndexFlatIP(embedding_dimension)
-    index.add(embeddings)
-    st.write("FAISS index ready")
-    
+
+    dimension = embeddings.shape[1]
+    new_index = faiss.IndexFlatIP(dimension)
+    new_index.add(embeddings)
+
     # BM25
     tokenized_corpus = [chunk["text"].lower().split() for chunk in chunks]
     bm25 = BM25Okapi(tokenized_corpus)
-    st.write("BM25 ready")
 
-    return index, chunks, bm25, embedding_model, reranker
+    return new_index, chunks, bm25, embedding_model, reranker
 
 
 index, chunks, bm25, embedding_model, reranker = load_resources()
@@ -434,6 +438,7 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

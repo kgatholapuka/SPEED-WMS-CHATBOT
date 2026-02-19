@@ -30,7 +30,10 @@ st.sidebar.divider()
 st.sidebar.subheader("🧠 AI Settings")
 
 AVAILABLE_MODELS = {
-    "🔥 Llama 3.3 70B (Executive Mode)": "llama-3.3-70b-versatile",
+    "🔥 Llama 3.3 70B (Executive Mode – Best Overall)": "llama-3.3-70b-versatile",
+    "🚀 Llama 4 Maverick 17B (Newest Gen)": "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "🧠 Qwen 3 32B (Structured Reasoning)": "qwen/qwen3-32b",
+    "💎 GPT-OSS 120B (Massive Model)": "openai/gpt-oss-120b",
     "⚖️ Llama 3.3 13B (Balanced)": "llama-3.3-13b-versatile",
     "⚡ Llama 3.1 8B (Fast)": "llama-3.1-8b-instant"
 }
@@ -325,3 +328,4 @@ please submit a support request.
 
     if submitted:
         st.success("✅ Support request captured.")
+

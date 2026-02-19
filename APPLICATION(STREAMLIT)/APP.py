@@ -12,28 +12,47 @@ from collections import deque
 # PAGE CONFIG
 # ==================================================
 st.set_page_config(
-    page_title="Speed WMS Chatbot",
-    page_icon="💬",
+    page_title="Speed WMS AI",
+    page_icon="🚀",
     layout="wide"
 )
 
 # ==================================================
-# SIDEBAR NAVIGATION
+# SIDEBAR
 # ==================================================
 st.sidebar.title("🤖 Puks AI")
-st.sidebar.markdown("Speed WMS Assistant")
+st.sidebar.markdown("Enterprise Speed WMS Assistant")
 
 options = ["💬 Chatbot", "🆘 Help & Support"]
-page = st.sidebar.selectbox("Main Menu", options)
+page = st.sidebar.selectbox("Navigation", options)
+
+st.sidebar.divider()
+st.sidebar.subheader("🧠 AI Settings")
+
+AVAILABLE_MODELS = {
+    "🔥 Llama 3.3 70B (Executive Mode)": "llama-3.3-70b-versatile",
+    "⚖️ Llama 3.3 13B (Balanced)": "llama-3.3-13b-versatile",
+    "⚡ Llama 3.1 8B (Fast)": "llama-3.1-8b-instant"
+}
+
+selected_model_label = st.sidebar.selectbox(
+    "Choose Model",
+    list(AVAILABLE_MODELS.keys())
+)
+
+SELECTED_MODEL = AVAILABLE_MODELS[selected_model_label]
+debug_mode = st.sidebar.toggle("🔍 Show Retrieved Context", value=False)
+
+st.sidebar.success(f"Model Active: {selected_model_label}")
 
 st.sidebar.divider()
 st.sidebar.caption(
-    "© Speed WMS • AI Support (Development Phase)\n"
+    "© Speed WMS • AI Support System\n"
     "Developed by Kgathola Puka"
 )
 
 # ==================================================
-# LOAD RESOURCES (CACHED)
+# LOAD RESOURCES
 # ==================================================
 @st.cache_resource
 def load_vector_store():
@@ -60,13 +79,13 @@ index, chunks, bm25, embedding_model, reranker = load_vector_store()
 client = load_llm_client()
 
 # ==================================================
-# SESSION-BASED CONVERSATION MEMORY
+# MEMORY
 # ==================================================
 MAX_TURNS = 8
 
 class ConversationMemory:
     def __init__(self, max_turns=MAX_TURNS):
-        self.history = deque(maxlen=max_turns*2)  # user+assistant
+        self.history = deque(maxlen=max_turns*2)
 
     def add_user(self, message):
         self.history.append({"role": "user", "content": message})
@@ -80,29 +99,36 @@ class ConversationMemory:
 memory = ConversationMemory()
 
 # ==================================================
-# RETRIEVAL FUNCTION (Vector + BM25 + CrossEncoder)
+# RETRIEVAL
 # ==================================================
 def retrieve_context(query, top_k=8):
     query_lower = query.lower()
     query_tokens = query_lower.split()
 
     schema_keywords = [
-        "sql", "select", "query", "join", "where", "insert", "update",
-        "column", "table", "queries", "relational", "foreign key", "primary key"
+        "sql","select","query","join","where",
+        "insert","update","column","table",
+        "foreign key","primary key"
     ]
-    is_schema_query = any(word in query_lower for word in schema_keywords)
 
-    # Vector search
+    process_keywords = [
+        "receipt","picking","movement","create",
+        "config","setup","process"
+    ]
+
+    is_schema_query = any(word in query_lower for word in schema_keywords)
+    is_process_query = any(word in query_lower for word in process_keywords)
+
     query_embedding = embedding_model.encode([query], convert_to_numpy=True).astype("float32")
     query_embedding /= np.linalg.norm(query_embedding, axis=1, keepdims=True)
     scores, indices = index.search(query_embedding, 30)
 
-    # BM25
     bm25_scores = bm25.get_scores(query_tokens)
 
     results = []
+
     for score, idx in zip(scores[0], indices[0]):
-        if idx == -1: 
+        if idx == -1:
             continue
 
         chunk = chunks[idx]
@@ -114,7 +140,10 @@ def retrieve_context(query, top_k=8):
         hybrid_score = vector_score + keyword_score
 
         if is_schema_query and metadata.get("is_table_schema", False):
-            hybrid_score += 0.15
+            hybrid_score += 0.2
+
+        if is_process_query and metadata.get("category","").lower() not in ["database","schema"]:
+            hybrid_score += 0.2
 
         table_name = metadata.get("table_name")
         if table_name and table_name.lower() in query_lower:
@@ -122,8 +151,6 @@ def retrieve_context(query, top_k=8):
 
         results.append({
             "score": hybrid_score,
-            "vector_score": vector_score,
-            "keyword_score": keyword_score,
             "text": text,
             "metadata": metadata
         })
@@ -131,7 +158,6 @@ def retrieve_context(query, top_k=8):
     if not results:
         return []
 
-    # Rerank
     candidates = sorted(results, key=lambda x: x["score"], reverse=True)[:20]
     pairs = [(query, r["text"]) for r in candidates]
     rerank_scores = reranker.predict(pairs)
@@ -145,57 +171,61 @@ def retrieve_context(query, top_k=8):
 # ==================================================
 # PROMPT BUILDER
 # ==================================================
+MAX_CONTEXT_CHARS = 12000
+
 def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
+
     context_sections = []
+    total_chars = 0
+
     for c in retrieved_chunks:
         metadata = c.get("metadata", {})
         text = c["text"]
 
-        table_name = metadata.get("table_name") or metadata.get("source", "N/A")
-        category = metadata.get("category", "unknown")
-
-        context_sections.append(
+        section = (
             f"[SOURCE: {metadata.get('source','unknown')} | "
-            f"CATEGORY: {category} | TABLE: {table_name} | SCORE: {c.get('score',0):.3f}]\n{text}"
+            f"CATEGORY: {metadata.get('category','unknown')} | "
+            f"TABLE: {metadata.get('table_name','N/A')}]\n{text}\n"
         )
+
+        total_chars += len(section)
+        if total_chars > MAX_CONTEXT_CHARS:
+            break
+
+        context_sections.append(section)
 
     context_text = "\n\n".join(context_sections)
 
-    table_chunks_present = any(c.get("metadata", {}).get("is_table_schema", False) for c in retrieved_chunks)
-
-    structured_instruction = ""
-    if table_chunks_present:
-        structured_instruction = (
-            "- List all table columns found in the context in a readable table format.\n"
-            "- Include: Table Name | Column Name | Description.\n"
-            "- Optionally, include example SQL SELECT statements.\n"
-            "- Do NOT invent tables or columns not present in the context.\n"
-        )
-
-    sql_instructions = ""
-    if sql_mode:
-        sql_instructions = "- This query appears SQL-related; include sample SELECT statements where relevant.\n"
-
     prompt = f"""
-You are an internal Speed WMS support assistant.
+You are the creator and architect of Speed WMS.
 
-Rules:
-- Use ONLY the provided context
-- Answer in detailed, step-by-step format
-{structured_instruction}{sql_instructions}
-- If the answer is not found, say exactly: 'I do not know, please contact the support team or submit a ticket.'
+You understand:
+- Database schema
+- Business logic
+- Receipts
+- Picking
+- Movements
+- Configuration
+- Troubleshooting
+- SQL
 
-Conversation so far:
+Use ONLY the provided context.
+Do NOT hallucinate.
+If answer not found say exactly:
+'I do not know, please contact the support team or submit a ticket.'
+
+Conversation:
 {memory_text}
 
 Context:
 {context_text}
 
-User question:
+User Question:
 {query}
 
-Answer (plain text, readable table if needed):
+Answer clearly and professionally:
 """
+
     return prompt.strip()
 
 # ==================================================
@@ -204,102 +234,94 @@ Answer (plain text, readable table if needed):
 def get_llm_answer(prompt):
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=SELECTED_MODEL,
             messages=[
-                {"role":"system","content":"You are a Speed WMS expert."},
-                {"role":"user","content":prompt}
+                {"role": "system", "content": "You are the architect of Speed WMS."},
+                {"role": "user", "content": prompt}
             ],
-            max_tokens=2000,
+            max_tokens=1200,
             temperature=0
         )
         return completion.choices[0].message.content.strip()
+
     except Exception as e:
         return f"❌ LLM request failed: {str(e)}"
 
 # ==================================================
-# CHAT HELPER
+# ASK FUNCTION
 # ==================================================
 def ask(question):
-    retrieved_chunks = retrieve_context(question)
-    sql_keywords = ["sql", "select", "query", "join", "where", "insert", "update", "column", "table"]
+    retrieved = retrieve_context(question)
+
+    sql_keywords = ["sql","select","query","join","where","insert","update"]
     is_sql_query = any(word in question.lower() for word in sql_keywords)
 
     prompt = build_prompt(
-        query=question,
-        retrieved_chunks=retrieved_chunks,
-        memory_text=memory.format(),
+        question,
+        retrieved,
+        memory.format(),
         sql_mode=is_sql_query
     )
 
     answer = get_llm_answer(prompt)
+
     memory.add_user(question)
     memory.add_assistant(answer)
 
-    return answer
+    return answer, retrieved
 
 # ==================================================
-# 💬 CHATBOT PAGE
+# CHATBOT PAGE
 # ==================================================
 if page == "💬 Chatbot":
-    st.title("💬 Speed WMS Chatbot")
-    st.markdown("""
-**Puks** answers questions strictly based on  
-**Speed WMS documentation** using Retrieval-Augmented Generation (RAG).
+    st.title("🚀 Speed WMS AI Assistant")
+    st.caption("Enterprise Retrieval-Augmented Intelligence System")
 
-⚠️ If the information is not found, Puks will say:  
-**“I do not know, please contact the support team or submit a ticket.”**
-""")
-
-    # Initialize session messages
     if "messages" not in st.session_state:
         st.session_state.messages = [{
             "role": "assistant",
-            "content": "👋 Hi! I’m **Puks**, your Speed WMS assistant. How can I help?"
+            "content": "👋 Welcome. I am **Puks**, architect-level Speed WMS intelligence."
         }]
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_input = st.chat_input("Ask a Speed WMS question...")
+    user_input = st.chat_input("Ask anything about Speed WMS...")
 
     if user_input:
-        st.session_state.messages.append({"role":"user", "content": user_input})
+        st.session_state.messages.append({"role":"user","content":user_input})
+
         with st.chat_message("assistant"):
-            with st.spinner("🔍 Searching documentation..."):
-                answer = ask(user_input)
-            st.markdown(f"💬 {answer}")
-            st.session_state.messages.append({"role":"assistant", "content": answer})
+            with st.spinner("🔍 Analyzing documentation..."):
+                answer, retrieved = ask(user_input)
+
+                if debug_mode:
+                    with st.expander("🔍 Retrieved Context"):
+                        for r in retrieved:
+                            st.write(r["metadata"])
+                            st.write(r["text"][:500])
+                            st.divider()
+
+            st.markdown(answer)
+            st.session_state.messages.append({"role":"assistant","content":answer})
 
 # ==================================================
-# 🆘 HELP & SUPPORT PAGE
+# HELP PAGE
 # ==================================================
 if page == "🆘 Help & Support":
     st.header("🆘 Help & Support")
 
     st.markdown("""
-If Puks could not fully answer your question, please log a support request.
-
-📌 **Note:**  
-Email sending is disabled on Streamlit Cloud.  
-This section is ready for **Power Automate / Ticketing integration**.
+If the AI could not fully answer your question,
+please submit a support request.
 """)
 
     with st.form("support_form"):
         name = st.text_input("Your Name")
         email = st.text_input("Your Email")
-        issue = st.text_area("Describe your issue in detail")
+        issue = st.text_area("Describe your issue")
         submitted = st.form_submit_button("Submit")
 
     if submitted:
-        st.success(
-            "✅ Support request captured.\n\n"
-            "This will be connected to Power Automate in the next phase."
-        )
-
-    st.markdown("""
----
-🤖 **Puks AI Assistant**  
-Built to help. Learning every day.
-""")
-
+        st.success("✅ Support request captured.")

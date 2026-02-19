@@ -398,7 +398,7 @@ def ask(question):
 # ==================================================
 if page == "💬 Chatbot":
 
-    st.title("🚀 Puks AI[Predictive Unified Knowledge System]")
+    st.title("🚀 Puks AI")
     st.caption("Speed WMS Retrieval-Augmented Intelligence System")
 
     if "messages" not in st.session_state:
@@ -446,6 +446,7 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

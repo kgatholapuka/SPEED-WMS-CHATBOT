@@ -178,156 +178,119 @@ def retrieve_context(query, top_k=3):
 # ==================================================
 # PROMPT BUILDER (FULL ARCHITECT MODE)
 # ==================================================
-def build_prompt(query, retrieved_chunks, memory_text=""):
-
-    query_lower = query.lower()
-
-    # ===============================
-    # INTENT DETECTION
-    # ===============================
-
-    is_table_request = any(
-        phrase in query_lower for phrase in [
-            "all columns",
-            "table",
-            "schema",
-            "structure",
-            "explain table"
-        ]
-    )
-
-    is_sql_generation = any(
-        phrase in query_lower for phrase in [
-            "sql",
-            "select",
-            "write query",
-            "generate query",
-            "how do i get",
-            "how do i join",
-            "report code",
-            "join"
-        ]
-    )
-
-    # ===============================
-    # BUILD CONTEXT
-    # ===============================
+def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
 
     context_sections = []
 
     for c in retrieved_chunks:
-
+        metadata = c.get("metadata", {})
         text = c["text"]
 
+        # If structured table JSON exists → build full readable schema
         if c.get("structured_data"):
-
             table_json = c["structured_data"]
 
-            lines = [
+            table_text_lines = [
                 f"TABLE NAME: {table_json.get('table_name')}",
-                f"DESCRIPTION: {table_json.get('description','')}",
+                f"DESCRIPTION: {table_json.get('description','No description')}",
                 f"PRIMARY KEY: {table_json.get('primary_key',[])}",
-                "",
                 "COLUMNS:"
             ]
 
             for col in table_json.get("columns", []):
-                line = (
-                    f"- {col.get('name')} "
-                    f"(SQL Server: {col.get('type_sql_server','')}, "
-                    f"Oracle: {col.get('type_oracle','')})"
-                    f"\n    Description: {col.get('description','')}"
-                    f"\n    PK: {col.get('is_primary_key',False)}"
-                    f"\n    FK: {col.get('is_foreign_key',False)}"
-                )
+                line = f"- {col.get('name','UNKNOWN')}: {col.get('description','')}"
+                line += f" | SQL Type: {col.get('type_sql_server','UNKNOWN')}"
+                line += f", Oracle Type: {col.get('type_oracle','UNKNOWN')}"
+                line += f" | PK: {col.get('is_primary_key',False)}"
+                line += f", FK: {col.get('is_foreign_key',False)}"
 
-                if col.get("references_table"):
-                    line += (
-                        f"\n    References: "
-                        f"{col.get('references_table')}."
-                        f"{col.get('references_column')}"
-                    )
+                if col.get('references_table') or col.get('references_column'):
+                    line += f" | References: {col.get('references_table')}.{col.get('references_column')}"
 
-                lines.append(line)
+                table_text_lines.append(line)
 
-            text = "\n".join(lines)
+            text = "\n".join(table_text_lines)
 
-        context_sections.append(text)
+        context_sections.append(
+            f"[SOURCE: {metadata.get('source','unknown')} | "
+            f"CATEGORY: {metadata.get('category','unknown')} | "
+            f"TABLE: {metadata.get('table_name','N/A')} | "
+            f"SCORE: {c.get('score',0):.3f}]\n{text}"
+        )
 
     context_text = "\n\n".join(context_sections)
 
-    # ===============================
-    # SYSTEM INSTRUCTIONS
-    # ===============================
+    # Detect context types
+    has_schema = any(
+        c.get("metadata", {}).get("is_table_schema", False)
+        for c in retrieved_chunks
+    )
 
-    if is_sql_generation:
+    has_process_docs = any(
+        c.get("metadata", {}).get("category", "").lower() not in ["database", "schema"]
+        for c in retrieved_chunks
+    )
 
-        system_instruction = """
-You are the original database architect of Speed WMS.
+    # ===== BEHAVIOR INSTRUCTIONS =====
 
-You MUST generate production-grade SQL.
+    behavior_instructions = """
+You are the creator and technical architect of Speed WMS.
 
-JOIN RULES:
+You understand:
+- Database schema and relationships
+- Business logic behind tables
+- How receipts are created
+- How picking works
+- How movements are generated
+- Configuration steps
+- User workflows in the UI
+- Troubleshooting operational issues
+- SQL queries when needed
 
-Inbound:
-- Use NOSU (Support number) but the support number somes from the rel_dat and is not in ree_dat so when they want to use the recption header with the lines they have to use the ree_nore and the act_code
-- Use REE_NORE (Reception header number)
-
-Outbound:
-- Use OPL_NOSU (Support number)
-- Use OIPE_NOOE (Outbound line)
-
-Tables commonly linked:
-ree_dat, rel_dat, stk_dat, mvt_dat,ope_dat,opl_dat,mie_dat,mil_dat,chg_dat,chl_dat
-
-Rules:
-1. Always use correct join keys before using those keys be sure to check from the table schema what that column is in that table if the column is a FK key please understand the tables first so that when you join will make sure to use the best columns to join.
-2. Prefer nosu to join buit also be carefully because nosu can be joined on the lines table e.g.rel_dat,opl_dat,mil_dat but can't be join from the headers. you can also search for more docuemnts to tell you about the support so that you can understand well.
-3. Always use the best joins based on the question and the goal of the output.
-4. Use clear aliases.
-5. Provide complete working SQL.
-6. Explain what the query does after the SQL.
-
-Do NOT hallucinate columns.
-Only use provided schema.
+Answer based strictly on the provided context.
+If multiple sources exist, combine them intelligently.
+Be clear, structured, and authoritative.
 """
 
-    elif is_table_request:
-
-        system_instruction = """
-You are the original database architect of Speed WMS.
-
-When explaining a table you MUST:
-
-1. Explain the business purpose.
-2. Provide full schema with meaning.
-3. Explain PK and FK.
-4. Explain inbound join logic.
-5. Explain outbound join logic.
-6. Provide example SQL joins.
-7. Mention NOSU / REE_NORE for inbound.
-8. Mention OPL_NOSU / OIPE_NOOE for outbound.
-
-Be technical and structured.
+    schema_instruction = ""
+    if has_schema:
+        schema_instruction = """
+If the user is asking about a table or columns:
+- List ALL columns found in the context.
+- Format as:
+  Table Name | Column Name | Description | Type | PK/FK | References
+- Do NOT invent columns.
+- If helpful, include example SELECT statements.
 """
 
-    else:
-
-        system_instruction = """
-You are a Speed WMS expert.
-Use only provided context.
-If not found say:
-'I do not know, please contact the support team or submit a ticket.'
+    operational_instruction = ""
+    if has_process_docs:
+        operational_instruction = """
+If the question is about a process (e.g., creating a receipt, picking, configuration):
+- Provide step-by-step instructions.
+- Explain what happens in the system.
+- Mention related tables only if relevant.
+- Explain business impact where useful.
 """
 
-    # ===============================
-    # FINAL PROMPT
-    # ===============================
+    sql_instruction = ""
+    if sql_mode:
+        sql_instruction = """
+If the question is SQL-related:
+- Provide clean, production-ready SQL examples.
+- Use proper joins and filtering when relevant.
+"""
 
     prompt = f"""
-{system_instruction}
+{behavior_instructions}
 
-Conversation:
+Rules:
+- Use ONLY the provided context.
+- Do NOT hallucinate.
+- If the answer is not found in context, say exactly:
+  'I do not know, please contact the support team or submit a ticket.'
+
+Conversation so far:
 {memory_text}
 
 Context:
@@ -336,10 +299,16 @@ Context:
 User Question:
 {query}
 
-Respond clearly and professionally.
+Instructions:
+{schema_instruction}
+{operational_instruction}
+{sql_instruction}
+
+Answer clearly and professionally:
 """
 
     return prompt.strip()
+
 
 
 
@@ -438,6 +407,7 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

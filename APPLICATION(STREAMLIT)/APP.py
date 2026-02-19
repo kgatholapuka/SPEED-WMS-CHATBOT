@@ -27,7 +27,7 @@ options = ["💬 Chatbot", "🆘 Help & Support"]
 page = st.sidebar.selectbox("Navigation", options)
 
 st.sidebar.divider()
-st.sidebar.subheader("🧠 AI Settings")
+st.sidebar.subheader("🧠 Model Settings")
 
 AVAILABLE_MODELS = {
     "🔥 Llama 3.3 70B (Executive Mode – Best Overall)": "llama-3.3-70b-versatile",
@@ -48,7 +48,7 @@ debug_mode = st.sidebar.toggle("🔍 Show Retrieved Context", value=False)
 st.sidebar.success(f"Model Active: {selected_model_label}")
 
 st.sidebar.divider()
-st.sidebar.caption("© Speed WMS • AI Support System")
+st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 
 # ==================================================
 # LOAD VECTOR STORE (YOUR DESKTOP LOGIC)
@@ -446,6 +446,7 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

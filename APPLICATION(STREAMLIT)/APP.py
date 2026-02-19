@@ -81,7 +81,7 @@ def load_resources():
     bm25 = BM25Okapi(tokenized_corpus)
     st.write("BM25 ready")
 
-    return new_index, chunks, bm25, embedding_model, reranker
+    return index, chunks, bm25, embedding_model, reranker
 
 
 index, chunks, bm25, embedding_model, reranker = load_resources()

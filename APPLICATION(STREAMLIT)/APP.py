@@ -186,7 +186,20 @@ def retrieve_context(query, top_k=3):
 # ==================================================
 # PROMPT BUILDER (FULL ARCHITECT MODE)
 # ==================================================
-def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
+def build_prompt(query, retrieved_chunks, memory_text=""):
+
+    query_lower = query.lower()
+
+    is_table_request = any(
+        phrase in query_lower for phrase in [
+            "all columns",
+            "table",
+            "schema",
+            "structure",
+            "how do i join",
+            "explain table"
+        ]
+    )
 
     context_sections = []
 
@@ -195,7 +208,6 @@ def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
         metadata = c.get("metadata", {})
         text = c["text"]
 
-        # Structured table support
         if c.get("structured_data"):
 
             table_json = c["structured_data"]
@@ -204,46 +216,80 @@ def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
                 f"TABLE NAME: {table_json.get('table_name')}",
                 f"DESCRIPTION: {table_json.get('description','')}",
                 f"PRIMARY KEY: {table_json.get('primary_key',[])}",
-                "COLUMNS:"
+                "",
+                "FULL COLUMN SCHEMA:"
             ]
 
             for col in table_json.get("columns", []):
-                line = f"- {col.get('name')}: {col.get('description','')}"
-                line += f" | SQL: {col.get('type_sql_server','')}"
-                line += f" | Oracle: {col.get('type_oracle','')}"
-                line += f" | PK: {col.get('is_primary_key',False)}"
-                line += f" | FK: {col.get('is_foreign_key',False)}"
+                line = (
+                    f"- {col.get('name')} "
+                    f"(SQL Server: {col.get('type_sql_server','')}, "
+                    f"Oracle: {col.get('type_oracle','')})"
+                    f"\n    Description: {col.get('description','')}"
+                    f"\n    PK: {col.get('is_primary_key',False)}"
+                    f"\n    FK: {col.get('is_foreign_key',False)}"
+                )
 
                 if col.get("references_table"):
-                    line += f" | Ref: {col.get('references_table')}.{col.get('references_column')}"
+                    line += (
+                        f"\n    References: "
+                        f"{col.get('references_table')}."
+                        f"{col.get('references_column')}"
+                    )
 
                 lines.append(line)
 
             text = "\n".join(lines)
 
-        context_sections.append(
-            f"[SOURCE: {metadata.get('source','unknown')} | "
-            f"CATEGORY: {metadata.get('category','unknown')}]\n{text}"
-        )
+        context_sections.append(text)
 
     context_text = "\n\n".join(context_sections)
 
-    prompt = f"""
-You are the creator and technical architect of Speed WMS.
+    if is_table_request:
 
-You fully understand:
-- Database schema and relationships
-- Receipts, picking, movements
-- Configuration
-- Business logic
-- SQL queries
-- Troubleshooting
+        system_instruction = """
+You are the original database architect of Speed WMS.
 
-Rules:
-- Use ONLY provided context.
-- Do NOT hallucinate.
-- If not found say exactly:
+When explaining a table you MUST:
+
+1. Explain the business purpose of the table.
+2. Provide the FULL schema with detailed meaning.
+3. Explain primary keys.
+4. Explain foreign keys.
+5. Explain inbound join logic.
+6. Explain outbound join logic.
+7. Explain best practice joins.
+
+JOIN RULES:
+
+Inbound joins typically use:
+- NOSU (Support number)
+- REE_NORE (Reception line)
+
+Outbound joins typically use:
+- OPL_NOSU (Support number)
+- OIPE_NOOE (Outbound line)
+
+If joining tables such as:
+ree_dat, rel_dat, stk_dat, mie_dat, mvt_dat
+
+Prefer NOSU-based joins where applicable.
+
+Always include example SQL joins.
+Be explicit and technical.
+Do not just list column names.
+"""
+
+    else:
+        system_instruction = """
+You are a Speed WMS expert.
+Answer using only provided context.
+If not found say:
 'I do not know, please contact the support team or submit a ticket.'
+"""
+
+    prompt = f"""
+{system_instruction}
 
 Conversation:
 {memory_text}
@@ -254,10 +300,11 @@ Context:
 User Question:
 {query}
 
-Answer clearly and professionally:
+Answer professionally and in detail:
 """
 
     return prompt.strip()
+
 
 # ==================================================
 # LLM CALL
@@ -287,7 +334,7 @@ def ask(question):
 
     retrieved = retrieve_context(question)
 
-    sql_keywords = ["sql","select","query","join","where","insert","update"]
+    sql_keywords = ["sql", "select", "query", "join", "where", "insert", "update", "column", "table"]
     is_sql_query = any(word in question.lower() for word in sql_keywords)
 
     prompt = build_prompt(
@@ -357,3 +404,4 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+

@@ -46,16 +46,14 @@ SELECTED_MODEL = AVAILABLE_MODELS[selected_model_label]
 debug_mode = st.sidebar.toggle("🔍 Show Retrieved Context", value=False)
 
 st.sidebar.success(f"Model Active: {selected_model_label}")
-
 st.sidebar.divider()
 st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 
 # ==================================================
-# LOAD VECTOR STORE (YOUR DESKTOP LOGIC)
+# LOAD VECTOR STORE & MODELS
 # ==================================================
 @st.cache_resource
 def load_resources():
-
     VECTOR_STORE = Path(__file__).parent / "data" / "vector_store"
 
     index = faiss.read_index(str(VECTOR_STORE / "faiss.index"))
@@ -63,22 +61,16 @@ def load_resources():
     with open(VECTOR_STORE / "metadata.pkl", "rb") as f:
         chunks = pickle.load(f)
 
-    # Embedding model (DESKTOP VERSION)
     embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
-    # Rebuild FAISS index (LIKE DESKTOP)
+    # Build FAISS embeddings
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = embedding_model.encode(
-        texts,
-        convert_to_numpy=True,
-        show_progress_bar=False
-    ).astype("float32")
-
+    embeddings = embedding_model.encode(texts, convert_to_numpy=True, show_progress_bar=False).astype("float32")
     faiss.normalize_L2(embeddings)
 
-    dimension = embeddings.shape[1]
-    new_index = faiss.IndexFlatIP(dimension)
+    dim = embeddings.shape[1]
+    new_index = faiss.IndexFlatIP(dim)
     new_index.add(embeddings)
 
     # BM25
@@ -86,7 +78,6 @@ def load_resources():
     bm25 = BM25Okapi(tokenized_corpus)
 
     return new_index, chunks, bm25, embedding_model, reranker
-
 
 index, chunks, bm25, embedding_model, reranker = load_resources()
 
@@ -101,264 +92,235 @@ client = load_llm()
 # ==================================================
 class ConversationMemory:
     def __init__(self, max_turns=8):
-        self.history = deque(maxlen=max_turns*2)
+        self.history = deque(maxlen=max_turns)
 
-    def add_user(self, msg):
-        self.history.append({"role": "user", "content": msg})
+    def add_user(self, message):
+        self.history.append({"role": "user", "content": message})
 
-    def add_assistant(self, msg):
-        self.history.append({"role": "assistant", "content": msg})
+    def add_assistant(self, message):
+        self.history.append({"role": "assistant", "content": message})
 
     def format(self):
         return "\n".join(f"{m['role'].upper()}: {m['content']}" for m in self.history)
 
-memory = ConversationMemory()
+memory = ConversationMemory(max_turns=8)
 
 # ==================================================
-# RETRIEVAL (YOUR DESKTOP VERSION)
+# HELPER FUNCTIONS
 # ==================================================
-def retrieve_context(query, top_k=3):
+def detect_document_type(chunk):
+    structured = chunk.get("structured_data")
+    if not structured:
+        return "TEXT"
+    if isinstance(structured, dict):
+        if "columns" in structured:
+            return "TABLE_SCHEMA"
+        if "procedures" in structured or "core_tables" in structured:
+            return "OPERATIONAL_REFERENCE"
+    return "TEXT"
+
+def validate_context(retrieved_chunks):
+    if not retrieved_chunks:
+        return False
+    high_quality = [c for c in retrieved_chunks if c.get("final_score",0) > 0.25]
+    return len(high_quality) > 0
+
+def validate_answer(answer, retrieved_chunks):
+    if not answer or len(answer.strip()) < 20:
+        return False
+    lower_answer = answer.lower()
+    phrases = ["not mentioned", "not provided", "no information"]
+    if any(p in lower_answer for p in phrases):
+        return False
+    return True
+
+# ==================================================
+# RETRIEVAL
+# ==================================================
+def retrieve_context(query, top_k=5):
     query_lower = query.lower()
     query_tokens = query_lower.split()
-    schema_keywords = ["sql","select","query","join","where","insert","update","column","table","queries","relational","foreign key","primary key"]
-    is_schema_query = any(word in query_lower for word in schema_keywords)
 
-    # Vector search
+    schema_keywords = ["sql","select","query","join","where","insert","update","column","columns","table","schema","foreign key","primary key"]
+    operational_keywords = ["reverse","reset","grn","receipt","shipment","mission","cancel","validate","close","reopen"]
+
+    is_schema_query = any(k in query_lower for k in schema_keywords)
+    is_operational_query = any(k in query_lower for k in operational_keywords)
+
     query_embedding = embedding_model.encode([query], convert_to_numpy=True).astype("float32")
-    query_embedding /= np.linalg.norm(query_embedding, axis=1, keepdims=True)
-    scores, indices = index.search(query_embedding, 30)
+    faiss.normalize_L2(query_embedding)
 
-    # BM25 scoring
+    scores, indices = index.search(query_embedding, 40)
     bm25_scores = bm25.get_scores(query_tokens)
-    results = []
 
+    results = []
     for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
         chunk = chunks[idx]
         metadata = chunk.get("metadata", {})
-        text = chunk["text"]
+        doc_type = detect_document_type(chunk)
 
-        vector_score = float(score)
-        keyword_score = bm25_scores[idx] / 10
-        hybrid_score = vector_score + keyword_score
+        vector_score = (float(score)+1)/2
+        keyword_score = bm25_scores[idx]/8
+        hybrid_score = (0.6*vector_score) + (0.3*keyword_score)
 
-        if is_schema_query and metadata.get("is_table_schema", False):
-            hybrid_score += 0.15
+        if is_operational_query and doc_type == "OPERATIONAL_REFERENCE":
+            hybrid_score += 0.4
+        if is_schema_query and doc_type == "TABLE_SCHEMA":
+            hybrid_score += 0.3
 
         table_name = metadata.get("table_name")
         if table_name and table_name.lower() in query_lower:
-            hybrid_score += 0.4
+            hybrid_score += 0.5
 
         results.append({
             "score": hybrid_score,
-            "vector_score": vector_score,
-            "keyword_score": keyword_score,
-            "text": text,
+            "doc_type": doc_type,
+            "text": chunk["text"],
             "metadata": metadata,
-            "structured_data": chunk.get("structured_data")  # store full table JSON if present
+            "structured_data": chunk.get("structured_data")
         })
 
     if not results:
-        return []
+        return [], 0.0
 
-    # Sort and rerank
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
-    candidates = results[:20]
-    pairs = [(query, r["text"]) for r in candidates]
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:25]
+    pairs = [(query, r["text"]) for r in results]
     rerank_scores = reranker.predict(pairs)
 
-    for i, r in enumerate(candidates):
+    for i, r in enumerate(results):
         r["rerank_score"] = float(rerank_scores[i])
+        r["final_score"] = (0.7*r["score"]) + (0.3*r["rerank_score"])
 
-    candidates = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
-    return candidates[:top_k]
-
+    candidates = sorted(results, key=lambda x: x["final_score"], reverse=True)[:top_k]
+    confidence = np.mean([r["final_score"] for r in candidates])
+    return candidates, float(confidence)
 
 # ==================================================
-# PROMPT BUILDER (FULL ARCHITECT MODE)
+# PROMPT BUILDER
 # ==================================================
 def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
-
     context_sections = []
+    has_schema = False
+    has_process_docs = False
 
     for c in retrieved_chunks:
         metadata = c.get("metadata", {})
-        text = c["text"]
+        text = c.get("text", "")
+        structured = c.get("structured_data")
 
-        # If structured table JSON exists → build full readable schema
-        if c.get("structured_data"):
-            table_json = c["structured_data"]
-
+        if isinstance(structured, dict) and "columns" in structured:
+            has_schema = True
             table_text_lines = [
-                f"TABLE NAME: {table_json.get('table_name')}",
-                f"DESCRIPTION: {table_json.get('description','No description')}",
-                f"PRIMARY KEY: {table_json.get('primary_key',[])}",
+                f"TABLE NAME: {structured.get('table_name','UNKNOWN')}",
+                f"DESCRIPTION: {structured.get('description','No description')}",
+                f"PRIMARY KEY: {structured.get('primary_key',[])}",
                 "COLUMNS:"
             ]
-
-            for col in table_json.get("columns", []):
+            for col in structured.get("columns", []):
                 line = f"- {col.get('name','UNKNOWN')}: {col.get('description','')}"
-                line += f" | SQL Type: {col.get('type_sql_server','UNKNOWN')}"
-                line += f", Oracle Type: {col.get('type_oracle','UNKNOWN')}"
-                line += f" | PK: {col.get('is_primary_key',False)}"
-                line += f", FK: {col.get('is_foreign_key',False)}"
-
-                if col.get('references_table') or col.get('references_column'):
+                line += f" | SQL: {col.get('type_sql_server','UNKNOWN')}, Oracle: {col.get('type_oracle','UNKNOWN')}"
+                line += f" | PK: {col.get('is_primary_key',False)}, FK: {col.get('is_foreign_key',False)}"
+                if col.get("references_table") and col.get("references_column"):
                     line += f" | References: {col.get('references_table')}.{col.get('references_column')}"
-
                 table_text_lines.append(line)
-
             text = "\n".join(table_text_lines)
 
+        if metadata.get("category","").lower() not in ["database","schema"]:
+            has_process_docs = True
+
         context_sections.append(
-            f"[SOURCE: {metadata.get('source','unknown')} | "
-            f"CATEGORY: {metadata.get('category','unknown')} | "
-            f"TABLE: {metadata.get('table_name','N/A')} | "
-            f"SCORE: {c.get('score',0):.3f}]\n{text}"
+            f"[SOURCE: {metadata.get('source','unknown')} | CATEGORY: {metadata.get('category','unknown')} | TABLE: {metadata.get('table_name','N/A')}]\n{text}"
         )
 
     context_text = "\n\n".join(context_sections)
 
-    # Detect context types
-    has_schema = any(
-        c.get("metadata", {}).get("is_table_schema", False)
-        for c in retrieved_chunks
-    )
+    schema_instruction = """
+SCHEMA MODE ACTIVE.
+Provide complete table and column details from context only.
+""" if has_schema else ""
 
-    has_process_docs = any(
-        c.get("metadata", {}).get("category", "").lower() not in ["database", "schema"]
-        for c in retrieved_chunks
-    )
+    sql_instruction = """
+SQL MODE ACTIVE.
+Generate clean SQL referencing only context tables/columns.
+""" if sql_mode else ""
 
-    # ===== BEHAVIOR INSTRUCTIONS =====
-
-    behavior_instructions = """
-You are the creator and technical architect of Speed WMS.
-
-You understand:
-- Database schema and relationships
-- Business logic behind tables
-- How receipts are created
-- How picking works
-- How movements are generated
-- Configuration steps
-- User workflows in the UI
-- Troubleshooting operational issues
-- SQL queries when needed
-
-Answer based strictly on the provided context.
-If multiple sources exist, combine them intelligently.
-Be clear, structured, and authoritative.
-"""
-
-    schema_instruction = ""
-    if has_schema:
-        schema_instruction = """
-If the user is asking about a table or columns:
-- List ALL columns found in the context.
-- Format as:
-  Table Name | Column Name | Description | Type | PK/FK | References
-- Do NOT invent columns.
-- If helpful, include example SELECT statements.
-"""
-
-    operational_instruction = ""
-    if has_process_docs:
-        operational_instruction = """
-If the question is about a process (e.g., creating a receipt, picking, configuration):
-- Provide step-by-step instructions.
-- Explain what happens in the system.
-- Mention related tables only if relevant.
-- Explain business impact where useful.
-"""
-
-    sql_instruction = ""
-    if sql_mode:
-        sql_instruction = """
-If the question is SQL-related:
-- Provide clean, production-ready SQL examples.
-- Use proper joins and filtering when relevant.
-"""
+    operational_instruction = """
+If the question relates to processes, provide step-by-step instructions.
+""" if has_process_docs else ""
 
     prompt = f"""
-{behavior_instructions}
+You are the Technical Architect of Speed WMS.
 
 Rules:
-- Use ONLY the provided context.
-- Do NOT hallucinate.
-- If the answer is not found in context, say exactly:
-  'I do not know, please contact the support team or submit a ticket.'
+- Answer strictly using the provided context.
+- Do NOT invent columns/tables/relationships.
+- If answer not found in context, respond: 'I do not know, please contact support.'
 
-Conversation so far:
+Conversation History:
 {memory_text}
 
-Context:
+======================
+CONTEXT
+======================
 {context_text}
 
-User Question:
+======================
+USER QUESTION
+======================
 {query}
 
-Instructions:
+======================
+INSTRUCTIONS
+======================
 {schema_instruction}
-{operational_instruction}
 {sql_instruction}
+{operational_instruction}
 
-Answer clearly and professionally:
+Provide a clear, professional, structured response:
 """
-
     return prompt.strip()
-
-
-
 
 # ==================================================
 # LLM CALL
 # ==================================================
 def get_llm_answer(prompt):
-
     try:
         completion = client.chat.completions.create(
             model=SELECTED_MODEL,
             messages=[
-                {"role": "system", "content": "You are a Speed WMS expert."},
-                {"role": "user", "content": prompt}
+                {"role":"system","content":"You are a Speed WMS expert."},
+                {"role":"user","content":prompt}
             ],
             max_tokens=3000,
             temperature=0
         )
-
         return completion.choices[0].message.content.strip()
-
     except Exception as e:
         return f"❌ LLM request failed: {str(e)}"
 
 # ==================================================
-# ASK
+# ASK FUNCTION
 # ==================================================
 def ask(question):
+    retrieved, confidence = retrieve_context(question)
+    if not validate_context(retrieved):
+        return "I do not know, please contact support.", retrieved
 
-    retrieved = retrieve_context(question)
-
-    prompt = build_prompt(
-        question,
-        retrieved,
-        memory.format()
-    )
-
+    prompt = build_prompt(question, retrieved, memory_text=memory.format())
     answer = get_llm_answer(prompt)
+    if not validate_answer(answer, retrieved):
+        answer = "I do not know, please contact support."
 
     memory.add_user(question)
     memory.add_assistant(answer)
-
     return answer, retrieved
-
 
 # ==================================================
 # CHAT UI
 # ==================================================
 if page == "💬 Chatbot":
-
     st.title("🚀 Puks AI")
     st.caption("Speed WMS Retrieval-Augmented Intelligence System")
 
@@ -375,13 +337,11 @@ if page == "💬 Chatbot":
     user_input = st.chat_input("Ask anything about Speed WMS...")
 
     if user_input:
-
         st.session_state.messages.append({"role":"user","content":user_input})
 
         with st.chat_message("assistant"):
             with st.spinner("🔍 Analyzing documentation..."):
                 answer, retrieved = ask(user_input)
-
                 if debug_mode:
                     with st.expander("🔍 Retrieved Context"):
                         for r in retrieved:
@@ -396,25 +356,11 @@ if page == "💬 Chatbot":
 # HELP PAGE
 # ==================================================
 if page == "🆘 Help & Support":
-
     st.header("🆘 Help & Support")
-
     with st.form("support_form"):
         name = st.text_input("Your Name")
         email = st.text_input("Your Email")
         issue = st.text_area("Describe your issue")
         submitted = st.form_submit_button("Submit")
-
     if submitted:
         st.success("✅ Support request captured.")
-
-
-
-
-
-
-
-
-
-
-

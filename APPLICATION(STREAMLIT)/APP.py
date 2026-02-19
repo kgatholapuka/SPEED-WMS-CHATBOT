@@ -118,43 +118,33 @@ memory = ConversationMemory()
 # RETRIEVAL (YOUR DESKTOP VERSION)
 # ==================================================
 def retrieve_context(query, top_k=3):
-
     query_lower = query.lower()
     query_tokens = query_lower.split()
-
-    schema_keywords = [
-        "sql","select","query","join","where","insert","update",
-        "column","table","foreign key","primary key"
-    ]
-
+    schema_keywords = ["sql","select","query","join","where","insert","update","column","table","queries","relational","foreign key","primary key"]
     is_schema_query = any(word in query_lower for word in schema_keywords)
 
-    query_embedding = embedding_model.encode(
-        [query],
-        convert_to_numpy=True
-    ).astype("float32")
-
+    # Vector search
+    query_embedding = embedding_model.encode([query], convert_to_numpy=True).astype("float32")
     query_embedding /= np.linalg.norm(query_embedding, axis=1, keepdims=True)
-
     scores, indices = index.search(query_embedding, 30)
 
+    # BM25 scoring
     bm25_scores = bm25.get_scores(query_tokens)
-
     results = []
 
     for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
-
         chunk = chunks[idx]
         metadata = chunk.get("metadata", {})
+        text = chunk["text"]
 
         vector_score = float(score)
         keyword_score = bm25_scores[idx] / 10
         hybrid_score = vector_score + keyword_score
 
         if is_schema_query and metadata.get("is_table_schema", False):
-            hybrid_score += 0.2
+            hybrid_score += 0.15
 
         table_name = metadata.get("table_name")
         if table_name and table_name.lower() in query_lower:
@@ -162,17 +152,19 @@ def retrieve_context(query, top_k=3):
 
         results.append({
             "score": hybrid_score,
-            "text": chunk["text"],
+            "vector_score": vector_score,
+            "keyword_score": keyword_score,
+            "text": text,
             "metadata": metadata,
-            "structured_data": chunk.get("structured_data")
+            "structured_data": chunk.get("structured_data")  # store full table JSON if present
         })
 
     if not results:
         return []
 
+    # Sort and rerank
     results = sorted(results, key=lambda x: x["score"], reverse=True)
     candidates = results[:20]
-
     pairs = [(query, r["text"]) for r in candidates]
     rerank_scores = reranker.predict(pairs)
 
@@ -180,8 +172,8 @@ def retrieve_context(query, top_k=3):
         r["rerank_score"] = float(rerank_scores[i])
 
     candidates = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
-
     return candidates[:top_k]
+
 
 # ==================================================
 # PROMPT BUILDER (FULL ARCHITECT MODE)
@@ -446,6 +438,7 @@ if page == "🆘 Help & Support":
 
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

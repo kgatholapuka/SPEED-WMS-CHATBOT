@@ -48,19 +48,7 @@ debug_mode = st.sidebar.toggle("🔍 Show Retrieved Context", value=False)
 
 st.sidebar.success(f"Model Active: {selected_model_label}")
 st.sidebar.divider()
-# ==================================================
-# MEMORY RESET BUTTON (SIDEBAR)
-# ==================================================
-st.sidebar.divider()
-if st.sidebar.button("🗑 Reset Conversation Memory"):
-    st.session_state.memory = ConversationMemory(max_turns=8)
-    st.session_state.messages = [{
-        "role": "assistant",
-        "content": "👋 Memory has been reset. You can start a new conversation now."
-    }]
-    st.experimental_rerun()  # Refresh the app to clear chat UI
 
-st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 
 # ==================================================
 # LOAD STATIC RESOURCES (Cached safely)
@@ -125,7 +113,19 @@ if "memory" not in st.session_state:
     st.session_state.memory = ConversationMemory(max_turns=1)
 
 memory = st.session_state.memory
+# ==================================================
+# MEMORY RESET BUTTON (SIDEBAR)
+# ==================================================
+st.sidebar.divider()
+if st.sidebar.button("🗑 Reset Conversation Memory"):
+    st.session_state.memory = ConversationMemory(max_turns=8)
+    st.session_state.messages = [{
+        "role": "assistant",
+        "content": "👋 Memory has been reset. You can start a new conversation now."
+    }]
+    st.experimental_rerun()  # Refresh the app to clear chat UI
 
+st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 # ==================================================
 # HELPER FUNCTIONS
 # ==================================================
@@ -401,6 +401,7 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

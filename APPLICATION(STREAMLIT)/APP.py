@@ -53,7 +53,7 @@ st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 # ==================================================
 # LOAD STATIC RESOURCES (Cached safely)
 # ==================================================
-@st.cache_resource
+
 def load_static_resources():
     VECTOR_STORE = Path(__file__).parent / "data" / "vector_store"
 
@@ -87,7 +87,7 @@ reranker = load_reranker()
 # ==================================================
 # LOAD LLM CLIENT
 # ==================================================
-@st.cache_resource
+
 def load_llm():
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
@@ -389,5 +389,6 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 

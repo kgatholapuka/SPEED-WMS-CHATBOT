@@ -30,11 +30,11 @@ st.sidebar.divider()
 st.sidebar.subheader("🧠 Model Settings")
 
 AVAILABLE_MODELS = {
-    "🔥 Llama 3.3 70B (Executive Mode – Best Overall)": "llama-3.3-70b-versatile",
-    "🚀 Llama 4 Maverick 17B (Newest Gen)": "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "🧠 Qwen 3 32B (Structured Reasoning)": "qwen/qwen3-32b",
-    "💎 GPT-OSS 120B (Massive Model)": "openai/gpt-oss-120b",
-    "⚡ Llama 3.1 8B (Fast)": "llama-3.1-8b-instant"
+    " Llama 3.3 70B (Executive Mode – Best Overall)": "llama-3.3-70b-versatile",
+    " Llama 4 Maverick 17B (Newest Gen)": "meta-llama/llama-4-maverick-17b-128e-instruct",
+    " Qwen 3 32B (Structured Reasoning)": "qwen/qwen3-32b",
+    "GPT-OSS 120B (Best Model)": "openai/gpt-oss-120b",
+    " Llama 3.1 8B (Fast)": "llama-3.1-8b-instant"
 }
 
 selected_model_label = st.sidebar.selectbox(
@@ -434,4 +434,5 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 

@@ -124,7 +124,7 @@ def detect_document_type(chunk):
 def validate_context(retrieved_chunks):
     if not retrieved_chunks:
         return False
-    high_quality = [c for c in retrieved_chunks if c.get("final_score",0) > 0.25]
+    high_quality = [c for c in retrieved_chunks if c.get("final_score",0) > 0.18]
     return len(high_quality) > 0
 
 def validate_answer(answer, retrieved_chunks):
@@ -439,6 +439,7 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

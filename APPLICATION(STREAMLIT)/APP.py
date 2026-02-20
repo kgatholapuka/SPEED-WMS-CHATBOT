@@ -6,6 +6,7 @@ from collections import deque
 import faiss
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from groq import Groq
+from rank_bm25 import BM25Okapi
 import torch
 
 # ==================================================
@@ -388,3 +389,4 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+

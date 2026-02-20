@@ -377,18 +377,38 @@ def get_llm_answer(prompt):
 # ASK FUNCTION
 # ==================================================
 def ask(question):
+
+    sql_keywords = [
+        "sql", "select", "join", "query","column", "columns", "schema", "structure",
+        "table definition", "fields", "table structure",
+        "code", "powerbi", "dashboard","ssrs",
+        "how long", "count", "group by"
+    ]
+
+    sql_mode = any(k in question.lower() for k in sql_keywords)
+
     retrieved, confidence = retrieve_context(question)
+
     if not validate_context(retrieved):
         return "I do not know, please contact support.", retrieved
 
-    prompt = build_prompt(question, retrieved, memory_text=memory.format())
+    prompt = build_prompt(
+        query=question,
+        retrieved_chunks=retrieved,
+        memory_text=memory.format(),
+        sql_mode=sql_mode   # 🔥 CRITICAL FIX
+    )
+
     answer = get_llm_answer(prompt)
+
     if not validate_answer(answer, retrieved):
         answer = "I do not know, please contact support."
 
     memory.add_user(question)
     memory.add_assistant(answer)
+
     return answer, retrieved
+
 
 # ==================================================
 # CHAT UI
@@ -439,6 +459,7 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

@@ -53,31 +53,29 @@ st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 # LOAD VECTOR STORE & MODELS
 # ==================================================
 @st.cache_resource
+@st.cache_resource
 def load_resources():
     VECTOR_STORE = Path(__file__).parent / "data" / "vector_store"
 
+    # ✅ Load prebuilt FAISS index
     index = faiss.read_index(str(VECTOR_STORE / "faiss.index"))
 
+    # ✅ Load metadata (chunks)
     with open(VECTOR_STORE / "metadata.pkl", "rb") as f:
         chunks = pickle.load(f)
 
+    # ✅ Load embedding model (only for query embedding)
     embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+    # ✅ Load reranker
     reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
-    # Build FAISS embeddings
-    texts = [chunk["text"] for chunk in chunks]
-    embeddings = embedding_model.encode(texts, convert_to_numpy=True, show_progress_bar=False).astype("float32")
-    faiss.normalize_L2(embeddings)
-
-    dim = embeddings.shape[1]
-    new_index = faiss.IndexFlatIP(dim)
-    new_index.add(embeddings)
-
-    # BM25
+    # ✅ Build BM25 once
     tokenized_corpus = [chunk["text"].lower().split() for chunk in chunks]
     bm25 = BM25Okapi(tokenized_corpus)
 
-    return new_index, chunks, bm25, embedding_model, reranker
+    return index, chunks, bm25, embedding_model, reranker
+
 
 index, chunks, bm25, embedding_model, reranker = load_resources()
 
@@ -103,7 +101,11 @@ class ConversationMemory:
     def format(self):
         return "\n".join(f"{m['role'].upper()}: {m['content']}" for m in self.history)
 
-memory = ConversationMemory(max_turns=8)
+if "memory" not in st.session_state:
+    st.session_state.memory = ConversationMemory(max_turns=8)
+
+memory = st.session_state.memory
+
 
 # ==================================================
 # HELPER FUNCTIONS
@@ -364,7 +366,8 @@ def get_llm_answer(prompt):
                 {"role":"user","content":prompt}
             ],
             max_tokens=3000,
-            temperature=0
+            temperature=0,
+            top_p = 1
         )
         return completion.choices[0].message.content.strip()
     except Exception as e:
@@ -415,9 +418,11 @@ if page == "💬 Chatbot":
                 if debug_mode:
                     with st.expander("🔍 Retrieved Context"):
                         for r in retrieved:
-                            st.write(r["metadata"])
+                            st.write("Final Score:", round(r.get("final_score",0),3))
+                            st.write("Metadata:", r["metadata"])
                             st.write(r["text"][:600])
                             st.divider()
+
 
             st.markdown(answer)
             st.session_state.messages.append({"role":"assistant","content":answer})
@@ -434,5 +439,6 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 

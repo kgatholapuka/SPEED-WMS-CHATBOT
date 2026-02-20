@@ -201,62 +201,131 @@ def retrieve_context(query, top_k=5):
 # PROMPT BUILDER
 # ==================================================
 def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
+
     context_sections = []
     has_schema = False
-    has_process_docs = False
 
+    # ----------------------------
+    # EXPAND STRUCTURED DATA
+    # ----------------------------
     for c in retrieved_chunks:
         metadata = c.get("metadata", {})
         text = c.get("text", "")
+
         structured = c.get("structured_data")
 
+        # If this chunk contains schema JSON
         if isinstance(structured, dict) and "columns" in structured:
             has_schema = True
-            table_text_lines = [
-                f"TABLE NAME: {structured.get('table_name','UNKNOWN')}",
-                f"DESCRIPTION: {structured.get('description','No description')}",
-                f"PRIMARY KEY: {structured.get('primary_key',[])}",
-                "COLUMNS:"
-            ]
+
+            table_name = structured.get("table_name", "UNKNOWN")
+            description = structured.get("description", "No description available")
+            primary_keys = structured.get("primary_key", [])
+
+            table_text_lines = []
+            table_text_lines.append(f"TABLE NAME: {table_name}")
+            table_text_lines.append(f"DESCRIPTION: {description}")
+            table_text_lines.append(f"PRIMARY KEY: {primary_keys}")
+            table_text_lines.append("COLUMNS:")
+
             for col in structured.get("columns", []):
-                line = f"- {col.get('name','UNKNOWN')}: {col.get('description','')}"
-                line += f" | SQL: {col.get('type_sql_server','UNKNOWN')}, Oracle: {col.get('type_oracle','UNKNOWN')}"
-                line += f" | PK: {col.get('is_primary_key',False)}, FK: {col.get('is_foreign_key',False)}"
+                column_block = [
+                    f"Column Name: {col.get('name', 'UNKNOWN')}",
+                    f"Description: {col.get('description', 'No description')}",
+                    f"SQL Server Type: {col.get('type_sql_server', 'UNKNOWN')}",
+                    f"Oracle Type: {col.get('type_oracle', 'UNKNOWN')}",
+                    f"Is Primary Key: {col.get('is_primary_key', False)}",
+                    f"Is Foreign Key: {col.get('is_foreign_key', False)}"
+                ]
+
                 if col.get("references_table") and col.get("references_column"):
-                    line += f" | References: {col.get('references_table')}.{col.get('references_column')}"
-                table_text_lines.append(line)
+                    column_block.append(
+                        f"References: {col.get('references_table')}.{col.get('references_column')}"
+                    )
+
+                table_text_lines.append("\n".join(column_block))
+                table_text_lines.append("-" * 40)
+
             text = "\n".join(table_text_lines)
 
-        if metadata.get("category","").lower() not in ["database","schema"]:
-            has_process_docs = True
-
         context_sections.append(
-            f"[SOURCE: {metadata.get('source','unknown')} | CATEGORY: {metadata.get('category','unknown')} | TABLE: {metadata.get('table_name','N/A')}]\n{text}"
+            f"[SOURCE: {metadata.get('source','unknown')} | "
+            f"CATEGORY: {metadata.get('category','unknown')} | "
+            f"TABLE: {metadata.get('table_name','N/A')}]\n{text}"
         )
 
     context_text = "\n\n".join(context_sections)
 
-    schema_instruction = """
+    # ----------------------------
+    # DETECT SCHEMA QUESTIONS
+    # ----------------------------
+    schema_keywords = [
+        "column", "columns", "schema", "structure",
+        "table definition", "fields", "table structure"
+    ]
+
+    is_schema_question = any(word in query.lower() for word in schema_keywords)
+
+    # ----------------------------
+    # SCHEMA INSTRUCTIONS
+    # ----------------------------
+    schema_hint = ""
+    if has_schema and is_schema_question:
+        schema_hint = """
 SCHEMA MODE ACTIVE.
-Provide complete table and column details from context only.
-""" if has_schema else ""
 
-    sql_instruction = """
+If the user is asking about a table structure or columns:
+
+You MUST provide a COMPLETE SCHEMA DEFINITION including:
+
+1. Table Name
+2. Table Description (if available)
+3. Primary Key(s)
+4. Total Number of Columns
+5. A structured table listing ALL columns with:
+
+   - Column Name
+   - Description
+   - SQL Server Data Type
+   - Oracle Data Type
+   - Primary Key (Yes/No)
+   - Foreign Key (Yes/No)
+   - Reference Table.Column (if applicable)
+
+Do NOT return only column names.
+Do NOT skip metadata.
+Use ONLY the provided context.
+If schema details are incomplete in context, state that clearly.
+"""
+
+    # ----------------------------
+    # SQL MODE INSTRUCTIONS
+    # ----------------------------
+    sql_hint = ""
+    if sql_mode:
+        sql_hint = """
 SQL MODE ACTIVE.
-Generate clean SQL referencing only context tables/columns.
-""" if sql_mode else ""
 
-    operational_instruction = """
-If the question relates to processes, provide step-by-step instructions.
-""" if has_process_docs else ""
+If SQL is required:
 
+- Generate production-ready SQL
+- Use explicit joins
+- Do NOT use SELECT *
+- Use proper formatting
+- Only reference tables/columns found in the context
+"""
+
+    # ----------------------------
+    # FINAL PROMPT
+    # ----------------------------
     prompt = f"""
 You are the Technical Architect of Speed WMS.
 
-Rules:
+CRITICAL RULES:
 - Answer strictly using the provided context.
-- Do NOT invent columns/tables/relationships.
-- If answer not found in context, respond: 'I do not know, please contact support.'
+- Do NOT invent columns, tables, or relationships.
+- If the answer is not found in the context, respond:
+  "I do not know, please contact support."
 
 Conversation History:
 {memory_text}
@@ -274,13 +343,14 @@ USER QUESTION
 ======================
 INSTRUCTIONS
 ======================
-{schema_instruction}
-{sql_instruction}
-{operational_instruction}
+{schema_hint}
+{sql_hint}
 
 Provide a clear, professional, structured response:
 """
+
     return prompt.strip()
+
 
 # ==================================================
 # LLM CALL
@@ -364,3 +434,4 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+

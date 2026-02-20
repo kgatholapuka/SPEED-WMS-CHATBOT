@@ -2,17 +2,17 @@ import streamlit as st
 from pathlib import Path
 import numpy as np
 import pickle
+from collections import deque
 import faiss
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from groq import Groq
-from rank_bm25 import BM25Okapi
-from collections import deque
+import torch
 
 # ==================================================
 # PAGE CONFIG
 # ==================================================
 st.set_page_config(
-    page_title="Puks AI(Predictive Unified Knowledge System)",
+    page_title="Puks AI (Predictive Unified Knowledge System)",
     page_icon="🚀",
     layout="wide"
 )
@@ -50,35 +50,42 @@ st.sidebar.divider()
 st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 
 # ==================================================
-# LOAD VECTOR STORE & MODELS
+# LOAD STATIC RESOURCES (Cached safely)
 # ==================================================
 @st.cache_resource
-@st.cache_resource
-def load_resources():
+def load_static_resources():
     VECTOR_STORE = Path(__file__).parent / "data" / "vector_store"
 
-    # ✅ Load prebuilt FAISS index
+    # ✅ Load FAISS index
     index = faiss.read_index(str(VECTOR_STORE / "faiss.index"))
 
     # ✅ Load metadata (chunks)
     with open(VECTOR_STORE / "metadata.pkl", "rb") as f:
         chunks = pickle.load(f)
 
-    # ✅ Load embedding model (only for query embedding)
+    # ✅ Load embedding model
     embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    # ✅ Load reranker
-    reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-
-    # ✅ Build BM25 once
+    # ✅ Build BM25
     tokenized_corpus = [chunk["text"].lower().split() for chunk in chunks]
-    bm25 = BM25Okapi(tokenized_corpus)
+    bm25 = CrossEncoder(tokenized_corpus) if False else BM25Okapi(tokenized_corpus)  # BM25 is cached
 
-    return index, chunks, bm25, embedding_model, reranker
+    return index, chunks, bm25, embedding_model
 
+index, chunks, bm25, embedding_model = load_static_resources()
 
-index, chunks, bm25, embedding_model, reranker = load_resources()
+# ==================================================
+# LOAD RERANKER (Deterministic, not cached)
+# ==================================================
+def load_reranker():
+    torch.manual_seed(42)
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device="cpu")
 
+reranker = load_reranker()
+
+# ==================================================
+# LOAD LLM CLIENT
+# ==================================================
 @st.cache_resource
 def load_llm():
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
@@ -86,7 +93,7 @@ def load_llm():
 client = load_llm()
 
 # ==================================================
-# MEMORY
+# MEMORY CLASS
 # ==================================================
 class ConversationMemory:
     def __init__(self, max_turns=8):
@@ -106,7 +113,6 @@ if "memory" not in st.session_state:
 
 memory = st.session_state.memory
 
-
 # ==================================================
 # HELPER FUNCTIONS
 # ==================================================
@@ -124,7 +130,10 @@ def detect_document_type(chunk):
 def validate_context(retrieved_chunks):
     if not retrieved_chunks:
         return False
-    high_quality = [c for c in retrieved_chunks if c.get("final_score",0) > 0.18]
+    # Clamp final_score to avoid false negatives
+    for c in retrieved_chunks:
+        c["final_score"] = min(max(c.get("final_score", 0), 0), 1)
+    high_quality = [c for c in retrieved_chunks if c["final_score"] > 0.15]  # slightly lower threshold
     return len(high_quality) > 0
 
 def validate_answer(answer, retrieved_chunks):
@@ -137,7 +146,7 @@ def validate_answer(answer, retrieved_chunks):
     return True
 
 # ==================================================
-# RETRIEVAL
+# RETRIEVAL FUNCTION
 # ==================================================
 def retrieve_context(query, top_k=5):
     query_lower = query.lower()
@@ -187,147 +196,79 @@ def retrieve_context(query, top_k=5):
     if not results:
         return [], 0.0
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:25]
-    pairs = [(query, r["text"]) for r in results]
+    results = sorted(results, key=lambda x: x["score"], reverse=True)
+    candidates = results[:25]
+
+    pairs = [(query, r["text"]) for r in candidates]
     rerank_scores = reranker.predict(pairs)
 
-    for i, r in enumerate(results):
+    for i, r in enumerate(candidates):
         r["rerank_score"] = float(rerank_scores[i])
         r["final_score"] = (0.7*r["score"]) + (0.3*r["rerank_score"])
 
-    candidates = sorted(results, key=lambda x: x["final_score"], reverse=True)[:top_k]
-    confidence = np.mean([r["final_score"] for r in candidates])
-    return candidates, float(confidence)
+    candidates = sorted(candidates, key=lambda x: x["final_score"], reverse=True)
+    top_results = candidates[:top_k]
+    confidence = np.mean([r["final_score"] for r in top_results])
+
+    return top_results, float(confidence)
 
 # ==================================================
 # PROMPT BUILDER
 # ==================================================
 def build_prompt(query, retrieved_chunks, memory_text="", sql_mode=False):
-
     context_sections = []
     has_schema = False
 
-    # ----------------------------
-    # EXPAND STRUCTURED DATA
-    # ----------------------------
     for c in retrieved_chunks:
         metadata = c.get("metadata", {})
         text = c.get("text", "")
-
         structured = c.get("structured_data")
 
-        # If this chunk contains schema JSON
         if isinstance(structured, dict) and "columns" in structured:
             has_schema = True
-
-            table_name = structured.get("table_name", "UNKNOWN")
-            description = structured.get("description", "No description available")
+            table_name = structured.get("table_name","UNKNOWN")
+            description = structured.get("description","No description available")
             primary_keys = structured.get("primary_key", [])
 
-            table_text_lines = []
-            table_text_lines.append(f"TABLE NAME: {table_name}")
-            table_text_lines.append(f"DESCRIPTION: {description}")
-            table_text_lines.append(f"PRIMARY KEY: {primary_keys}")
-            table_text_lines.append("COLUMNS:")
-
+            table_text_lines = [f"TABLE NAME: {table_name}", f"DESCRIPTION: {description}", f"PRIMARY KEY: {primary_keys}", "COLUMNS:"]
             for col in structured.get("columns", []):
                 column_block = [
-                    f"Column Name: {col.get('name', 'UNKNOWN')}",
-                    f"Description: {col.get('description', 'No description')}",
-                    f"SQL Server Type: {col.get('type_sql_server', 'UNKNOWN')}",
-                    f"Oracle Type: {col.get('type_oracle', 'UNKNOWN')}",
+                    f"Column Name: {col.get('name','UNKNOWN')}",
+                    f"Description: {col.get('description','No description')}",
+                    f"SQL Server Type: {col.get('type_sql_server','UNKNOWN')}",
+                    f"Oracle Type: {col.get('type_oracle','UNKNOWN')}",
                     f"Is Primary Key: {col.get('is_primary_key', False)}",
                     f"Is Foreign Key: {col.get('is_foreign_key', False)}"
                 ]
-
                 if col.get("references_table") and col.get("references_column"):
-                    column_block.append(
-                        f"References: {col.get('references_table')}.{col.get('references_column')}"
-                    )
-
+                    column_block.append(f"References: {col.get('references_table')}.{col.get('references_column')}")
                 table_text_lines.append("\n".join(column_block))
-                table_text_lines.append("-" * 40)
-
+                table_text_lines.append("-"*40)
             text = "\n".join(table_text_lines)
 
-        context_sections.append(
-            f"[SOURCE: {metadata.get('source','unknown')} | "
-            f"CATEGORY: {metadata.get('category','unknown')} | "
-            f"TABLE: {metadata.get('table_name','N/A')}]\n{text}"
-        )
+        context_sections.append(f"[SOURCE: {metadata.get('source','unknown')} | CATEGORY: {metadata.get('category','unknown')} | TABLE: {metadata.get('table_name','N/A')}]\n{text}")
 
     context_text = "\n\n".join(context_sections)
 
-    # ----------------------------
-    # DETECT SCHEMA QUESTIONS
-    # ----------------------------
-    schema_keywords = [
-        "column", "columns", "schema", "structure",
-        "table definition", "fields", "table structure"
-    ]
-
-    is_schema_question = any(word in query.lower() for word in schema_keywords)
-
-    # ----------------------------
-    # SCHEMA INSTRUCTIONS
-    # ----------------------------
     schema_hint = ""
-    if has_schema and is_schema_question:
+    if has_schema and any(w in query.lower() for w in ["column","columns","schema","structure","table definition","fields","table structure"]):
         schema_hint = """
-SCHEMA MODE ACTIVE.
-
-If the user is asking about a table structure or columns:
-
-You MUST provide a COMPLETE SCHEMA DEFINITION including:
-
-1. Table Name
-2. Table Description (if available)
-3. Primary Key(s)
-4. Total Number of Columns
-5. A structured table listing ALL columns with:
-
-   - Column Name
-   - Description
-   - SQL Server Data Type
-   - Oracle Data Type
-   - Primary Key (Yes/No)
-   - Foreign Key (Yes/No)
-   - Reference Table.Column (if applicable)
-
-Do NOT return only column names.
-Do NOT skip metadata.
-Use ONLY the provided context.
-If schema details are incomplete in context, state that clearly.
+SCHEMA MODE ACTIVE. Provide complete schema definition using ONLY the context.
 """
 
-    # ----------------------------
-    # SQL MODE INSTRUCTIONS
-    # ----------------------------
     sql_hint = ""
-    if sql_mode:
+    if any(k in query.lower() for k in ["sql","select","join","query","columns","table","schema"]):
         sql_hint = """
-SQL MODE ACTIVE.
-
-If SQL is required:
-
-- Generate production-ready SQL
-- Use explicit joins
-- Do NOT use SELECT *
-- Use proper formatting
-- Only reference tables/columns found in the context
+SQL MODE ACTIVE. Generate production-ready SQL using ONLY context.
 """
 
-    # ----------------------------
-    # FINAL PROMPT
-    # ----------------------------
     prompt = f"""
 You are the Technical Architect of Speed WMS.
 
 CRITICAL RULES:
 - Answer strictly using the provided context.
 - Do NOT invent columns, tables, or relationships.
-- If the answer is not found in the context, respond:
-  "I do not know, please contact support."
+- If the answer is not found in the context, respond: "I do not know, please contact support."
 
 Conversation History:
 {memory_text}
@@ -350,9 +291,7 @@ INSTRUCTIONS
 
 Provide a clear, professional, structured response:
 """
-
     return prompt.strip()
-
 
 # ==================================================
 # LLM CALL
@@ -367,7 +306,7 @@ def get_llm_answer(prompt):
             ],
             max_tokens=3000,
             temperature=0,
-            top_p = 1
+            top_p=1
         )
         return completion.choices[0].message.content.strip()
     except Exception as e:
@@ -377,14 +316,7 @@ def get_llm_answer(prompt):
 # ASK FUNCTION
 # ==================================================
 def ask(question):
-
-    sql_keywords = [
-        "sql", "select", "join", "query","column", "columns", "schema", "structure",
-        "table definition", "fields", "table structure",
-        "code", "powerbi", "dashboard","ssrs",
-        "how long", "count", "group by"
-    ]
-
+    sql_keywords = ["sql","select","join","query","column","columns","schema","structure","table definition","fields","table structure","code","powerbi","dashboard","ssrs"]
     sql_mode = any(k in question.lower() for k in sql_keywords)
 
     retrieved, confidence = retrieve_context(question)
@@ -396,7 +328,7 @@ def ask(question):
         query=question,
         retrieved_chunks=retrieved,
         memory_text=memory.format(),
-        sql_mode=sql_mode   # 🔥 CRITICAL FIX
+        sql_mode=sql_mode
     )
 
     answer = get_llm_answer(prompt)
@@ -408,7 +340,6 @@ def ask(question):
     memory.add_assistant(answer)
 
     return answer, retrieved
-
 
 # ==================================================
 # CHAT UI
@@ -442,8 +373,6 @@ if page == "💬 Chatbot":
                             st.write("Metadata:", r["metadata"])
                             st.write(r["text"][:600])
                             st.divider()
-
-
             st.markdown(answer)
             st.session_state.messages.append({"role":"assistant","content":answer})
 
@@ -459,8 +388,3 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
-
-
-
-
-

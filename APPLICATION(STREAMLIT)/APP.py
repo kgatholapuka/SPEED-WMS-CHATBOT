@@ -123,7 +123,7 @@ if st.sidebar.button("🗑 Reset Conversation Memory"):
         "role": "assistant",
         "content": "👋 Memory has been reset. You can start a new conversation now."
     }]
-    st.rerun("app")  # Refresh the app to clear chat UI
+    st.rerun()  # Refresh the app to clear chat UI
 
 st.sidebar.caption("© Puks AI System (Predictive Unified Knowledge System)")
 # ==================================================
@@ -401,6 +401,7 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 

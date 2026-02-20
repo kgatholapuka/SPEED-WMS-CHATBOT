@@ -110,7 +110,7 @@ class ConversationMemory:
         return "\n".join(f"{m['role'].upper()}: {m['content']}" for m in self.history)
 
 if "memory" not in st.session_state:
-    st.session_state.memory = ConversationMemory(max_turns=8)
+    st.session_state.memory = ConversationMemory(max_turns=1)
 
 memory = st.session_state.memory
 
@@ -389,6 +389,7 @@ if page == "🆘 Help & Support":
         submitted = st.form_submit_button("Submit")
     if submitted:
         st.success("✅ Support request captured.")
+
 
 
 
